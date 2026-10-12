@@ -44,6 +44,9 @@
      :rettype   default :void. With :int, a truthy handler return becomes 1
      :controller (fn [] ptr) for input that arrives through a
                 GtkEventController rather than a signal on the widget
+     :target    (fn [widget] ptr) to connect on an object the widget owns
+                instead of the widget itself: a text view's buffer emits
+                changed, the view does not
      :attach    :window to add the controller to the toplevel instead of the
                 widget, which is what key handling wants"
   (atom
@@ -90,11 +93,12 @@
   "Connects one signal to a stable C callback that reads the current handler out
    of `holder`. The closure captured at creation time therefore never goes stale
    when a later render supplies a new handler fn."
-  [widget prop holder]
-  (let [{:keys [signal invoke argtypes rettype controller attach]
-         :or   {argtypes [:pointer :pointer] rettype :void}} (@signals prop)
+  ([widget prop holder] (connect! widget prop holder nil))
+  ([widget prop holder spec]
+  (let [{:keys [signal invoke argtypes rettype controller attach target]
+         :or   {argtypes [:pointer :pointer] rettype :void}} (or (get-in spec [:signals prop]) (@signals prop))
         void?   (= :void rettype)
-        target  (if controller (controller) widget)
+        target  (cond controller (controller) target (target widget) :else widget)
         ;; a handler that returns nothing means "not handled", which for a
         ;; :rettype :int signal like key-pressed has to be 0, not nil
         ->ret   (fn [v] (cond void?      nil
@@ -110,8 +114,8 @@
                              (catch Throwable t
                                (report! (str prop " handler failed") t)
                                (->ret nil))))
-                         argtypes rettype)]
-    (g/signal-connect-data target signal cb nil nil 0)
+                         argtypes rettype)
+        handler-id (g/signal-connect-data target signal cb nil nil 0)]
     (when controller
       ;; :window because key events go to the toplevel; a controller on a
       ;; widget that never takes focus would never fire
@@ -122,7 +126,7 @@
         (g/event-controller-set-phase target (:capture g/phase))
         (g/widget-add-controller host target)
         (swap! controllers conj {:prop prop :controller target :host host})))
-    target))
+    {:target target :handler-id handler-id})))
 
 ;; ---------------------------------------------------------------------------
 ;; common props
@@ -154,14 +158,14 @@
     (g/widget-set-size-request w (int (get props :width -1)) (int (get props :height -1))))
   ;; individual margins win over the uniform one, so :margin can set a base and
   ;; :margin-start override it
-  (when (contains? changed :margin-start)
-    (g/widget-set-margin-start w (int (get props :margin-start 0))))
-  (when (contains? changed :margin-end)
-    (g/widget-set-margin-end w (int (get props :margin-end 0))))
-  (when (contains? changed :margin-top)
-    (g/widget-set-margin-top w (int (get props :margin-top 0))))
-  (when (contains? changed :margin-bottom)
-    (g/widget-set-margin-bottom w (int (get props :margin-bottom 0))))
+  (when (or (contains? changed :margin) (contains? changed :margin-start))
+    (g/widget-set-margin-start w (int (get props :margin-start (get props :margin 0)))))
+  (when (or (contains? changed :margin) (contains? changed :margin-end))
+    (g/widget-set-margin-end w (int (get props :margin-end (get props :margin 0)))))
+  (when (or (contains? changed :margin) (contains? changed :margin-top))
+    (g/widget-set-margin-top w (int (get props :margin-top (get props :margin 0)))))
+  (when (or (contains? changed :margin) (contains? changed :margin-bottom))
+    (g/widget-set-margin-bottom w (int (get props :margin-bottom (get props :margin 0)))))
   ;; :focusable false keeps a widget out of the Tab chain, so it can never
   ;; steal a keystroke meant for the app
   (when (contains? changed :focusable)
@@ -175,18 +179,101 @@
 ;; widget specs
 ;; ---------------------------------------------------------------------------
 
-(defn- box-spec [orientation]
-  {:ctor      (fn [p] (g/box-new orientation (or (:spacing p) 0)))
-   :apply     (fn [w p changed]
-                (when (contains? changed :spacing)
-                  (g/box-set-spacing w (or (:spacing p) 0))))
-   :append    (fn [parent child _props] (g/box-append parent child))
-   ;; positional insert, so a keyed move is one call instead of re-appending
-   ;; every sibling after it. sibling nil = first.
-   :insert-after (fn [parent child sibling _props]
-                   (g/box-insert-child-after parent child sibling))
-   :remove    (fn [parent child _props] (g/box-remove parent child))
-   :container true})
+(defn- widget-spec [ctor apply-props]
+  {:ctor (fn [p]
+           (let [w (ctor)]
+             (apply-props w p (set (keys p)))
+             w))
+   :apply apply-props})
+
+(defn- apply-box! [w p changed]
+  (when (contains? changed :spacing)
+    (g/box-set-spacing w (or (:spacing p) 0)))
+  (when (contains? changed :homogeneous)
+    (g/box-set-homogeneous w (g/->gbool (:homogeneous p)))))
+
+(defn- box-spec [orientation apply-props]
+  (assoc (widget-spec #(g/box-new orientation 0) apply-props)
+         :append (fn [parent child _props] (g/box-append parent child))
+         ;; positional insert, so a keyed move is one call instead of re-appending
+         ;; every sibling after it. sibling nil = first.
+         :insert-after (fn [parent child sibling _props]
+                         (g/box-insert-child-after parent child sibling))
+         :remove (fn [parent child _props] (g/box-remove parent child))))
+
+(defn- apply-button! [w p changed]
+  (when (or (contains? changed :label) (contains? changed :icon))
+    (if-let [icon (:icon p)]
+      (g/button-set-icon-name w icon)
+      (g/button-set-label w (str (:label p "")))))
+  (when (contains? changed :has-frame)
+    (g/button-set-has-frame w (g/->gbool (get p :has-frame true)))))
+
+(defn- apply-label! [w p changed]
+  (when (or (contains? changed :markup) (contains? changed :label))
+    (if (:markup p)
+      (g/label-set-markup w (:markup p))
+      (g/label-set-text w (str (:label p "")))))
+  (when (contains? changed :wrap)
+    (g/label-set-wrap w (g/->gbool (:wrap p))))
+  (when (contains? changed :selectable)
+    (g/label-set-selectable w (g/->gbool (:selectable p))))
+  (when (contains? changed :ellipsize)
+    (g/label-set-ellipsize w (get g/ellipsize-mode (get p :ellipsize :none) 0)))
+  (when (contains? changed :max-width-chars)
+    (g/label-set-max-width-chars w (int (or (:max-width-chars p) -1))))
+  (when (contains? changed :xalign)
+    (g/label-set-xalign w (float (:xalign p 0.5)))))
+
+(defn- apply-image! [w p changed]
+  (when (or (contains? changed :file) (contains? changed :icon))
+    (if (:file p)
+      (g/image-set-from-file w (str (:file p)))
+      (g/image-set-from-icon w (:icon p))))
+  (when (contains? changed :size)
+    (g/image-set-pixel-size w (int (:size p -1)))))
+
+(defn- apply-editable! [w p changed]
+  ;; only write back when it really differs, so we do not fight the caret
+  ;; while the user types
+  (when (contains? changed :value)
+    (let [value (str (:value p))]
+      (when (not= value (g/editable-get-text w))
+        (g/editable-set-text w value))))
+  (when (contains? changed :editable)
+    (g/editable-set-editable w (g/->gbool (get p :editable true)))))
+
+(defn- set-scroll-policy! [w p]
+  (g/scrolled-window-set-policy w
+                                (g/policy (or (:hscroll p) :never))
+                                (g/policy (or (:vscroll p) :automatic))))
+
+(defn- apply-scrolled! [w p changed]
+  (when (or (contains? changed :hscroll) (contains? changed :vscroll))
+    (set-scroll-policy! w p)))
+
+(defn- single-child
+  "Append/remove for a container that holds one child through a set-child
+   function; removing sets it to nil."
+  [set-child!]
+  {:append (fn [w child _] (set-child! w child))
+   :remove (fn [w _ _] (set-child! w nil))})
+
+(defn packed
+  "Append/remove for a bar that packs any number of :start and :end children
+   around one :center widget, picked by the child's :slot prop. A child without
+   one packs at the start, as GTK's builder does, so a second slotless child
+   cannot silently replace the title. `remove!` takes a child out of whichever
+   of the three it is in. Public so gtkiccup.adw can give AdwHeaderBar the same
+   slots."
+  [packers remove!]
+  {:append (fn [w child p] ((packers (:slot p :start)) w child))
+   :remove (fn [w child _] (remove! w child))})
+
+(defn- apply-text-entry! [w p changed]
+  (apply-editable! w p changed)
+  (when (contains? changed :placeholder)
+    (g/object-set-string w "placeholder-text" (:placeholder p) nil)))
 
 (def widgets
   "tag -> widget spec. An atom so an optional namespace -- gtk.adw, say -- can
@@ -198,27 +285,44 @@
      :text-prop  which prop string/number children fold into  (optional)
      :append     (fn [parent child-ptr child-props] ...)       (containers only)
      :remove     (fn [parent child-ptr child-props] ...)       (containers only)
+     :child-apply (fn [parent child-ptr child-props changed-key-set] ...)
+                 (optional) a child's props changed; for props the parent owns,
+                 like a grid cell or an overlay alignment
      :insert-after (fn [parent child-ptr sibling-ptr-or-nil child-props] ...)
                  (optional) put a child right after a sibling. Without it, an
                  insert in the middle re-appends the children that follow
-     :after-children (fn [widget props] ...)  (optional) run once at creation,
+     :on-mount (fn [widget props] ...)  (optional) run once at creation,
                  after the children are in place -- for a container whose props
                  refer to its children, like a carousel's initial page
+     :on-render (fn [widget props child-elements] ...)  (optional) run after
+                 every render that changed the props or the children -- for a
+                 prop the children carry, like a list box's selected row or a
+                 radio group's active check. Handlers are silenced meanwhile
 
    `child-props` is there so a container can honour a :slot prop, which is how
    libadwaita's prefix/suffix/top-bar slots are addressed."
   (atom
-  {:vbox   (box-spec g/VERTICAL)
-   :hbox   (box-spec g/HORIZONTAL)
+  {:vbox   (box-spec g/VERTICAL apply-box!)
+   :hbox   (box-spec g/HORIZONTAL apply-box!)
+   :header-bar
+   (merge (widget-spec g/header-bar-new
+            (fn [w p changed]
+              (when (contains? changed :show-title-buttons)
+                (g/header-bar-set-show-title-buttons w (g/->gbool (get p :show-title-buttons true))))
+              (when (contains? changed :decoration-layout)
+                (g/header-bar-set-decoration-layout w (:decoration-layout p)))))
+          (packed {:start  g/header-bar-pack-start
+                   :center g/header-bar-set-title-widget
+                   :end    g/header-bar-pack-end}
+                  g/header-bar-remove))
 
    ;; A single-child holder that hands the child its whole allocation, so a
    ;; child with :valign :center really does sit in the middle. A one-child
    ;; GtkBox would not: a box gives its child the natural height and no more.
    ;; gtk.adw replaces this with AdwBin, which is the same idea.
-   :bin    {:ctor   (fn [_] (g/overlay-new))
-            :apply  (fn [_ _ _] nil)
-            :append (fn [parent child _props] (g/overlay-set-child parent child))
-            :remove (fn [parent _child _props] (g/overlay-set-child parent nil))}
+   :bin    (merge {:ctor  (fn [_] (g/overlay-new))
+                   :apply (fn [_ _ _] nil)}
+                  (single-child g/overlay-set-child))
 
    ;; Keeps content a readable width, centred. Plain GTK4 has no maximum-width
    ;; layout, so :max becomes a width request instead: the child is exactly
@@ -227,7 +331,7 @@
    ;; minimum, so the window cannot be resized narrower than :max, where a real
    ;; AdwClamp would let the content shrink. gtk.adw replaces it with the real
    ;; AdwClamp, which is what runs on a GNOME desktop.
-   :clamp  (merge (box-spec g/VERTICAL)
+   :clamp  (merge (box-spec g/VERTICAL apply-box!)
                   {:ctor (fn [p]
                            (doto (g/box-new g/VERTICAL 0)
                              (g/widget-set-halign (get g/align :center 0))
@@ -239,14 +343,10 @@
    ;; never/automatic: content scrolls vertically when taller than the cap and
    ;; never sideways, which is what a list of rows wants. The cap itself is
    ;; CSS (min-height/max-height), as GtkScrolledWindow honors it.
-   :scrolled {:ctor   (fn [p]
-                        (doto (g/scrolled-window-new)
-                          (g/scrolled-window-set-policy
-                            (get g/policy (or (:hscroll p) :never) 2)
-                            (get g/policy (or (:vscroll p) :automatic) 1))))
-              :apply  (fn [_ _ _] nil)
-              :append (fn [parent child _props] (g/scrolled-window-set-child parent child))
-              :remove (fn [parent _child _props] (g/scrolled-window-set-child parent nil))}
+   :scrolled
+   (merge (widget-spec #(doto (g/scrolled-window-new) (set-scroll-policy! {}))
+                        apply-scrolled!)
+          (single-child g/scrolled-window-set-child))
 
    ;; One child underneath, any number floating on top. A child with
    ;; :slot :over floats; anything else is the content. Overlaid children are
@@ -254,6 +354,13 @@
    ;; caret at a measured pixel offset.
    :overlay {:ctor   (fn [_] (g/overlay-new))
              :apply  (fn [_ _ _] nil)
+             ;; Alignment only queues an allocate, and GtkOverlay places its
+             ;; overlaid children in its own layout pass -- so a child whose
+             ;; :halign/:valign changed stays put until the overlay is resized.
+             ;; Margins and size requests queue a resize by themselves.
+             :child-apply (fn [parent _ _ changed]
+                            (when (some changed [:halign :valign])
+                              (g/widget-queue-resize parent)))
              :append (fn [parent child props]
                        (if (= :over (:slot props :content))
                          (g/overlay-add-overlay parent child)
@@ -266,73 +373,56 @@
    ;; :icon takes a theme name, :file takes a path -- an SVG works either way.
    ;; GtkImage's pixel-size is an actual size, not a minimum, so it scales a
    ;; high-resolution source down cleanly.
-   :icon   {:text-prop :icon
-            :ctor  (fn [p]
-                     (doto (if (:file p)
-                             (g/image-new-from-file (str (:file p)))
-                             (g/image-new-from-icon (:icon p)))
-                       (g/image-set-pixel-size (int (:size p -1)))))
-            :apply (fn [w p changed]
-                     (when (contains? changed :file)
-                       (g/image-set-from-file w (str (:file p))))
-                     (when (and (contains? changed :icon) (not (:file p)))
-                       (g/image-set-from-icon w (:icon p)))
-                     (when (contains? changed :size)
-                       (g/image-set-pixel-size w (int (:size p -1)))))}
+   :icon   (assoc (widget-spec #(g/image-new-from-icon nil) apply-image!)
+                  :text-prop :icon)
+
+   :picture
+   (assoc (widget-spec g/picture-new
+            (fn [w p changed]
+              (when (contains? changed :file)
+                (g/picture-set-filename w (some-> (:file p) str)))
+              (when (contains? changed :content-fit)
+                (g/picture-set-content-fit
+                 w (get g/content-fit (:content-fit p :contain) 1)))
+              (when (contains? changed :can-shrink)
+                (g/picture-set-can-shrink w (g/->gbool (get p :can-shrink true))))
+              (when (contains? changed :alternative-text)
+                (g/picture-set-alternative-text w (:alternative-text p)))))
+          :text-prop :file)
 
    ;; :markup is Pango markup and wins over :label when both are given. Whatever
    ;; builds it must escape first -- see the deck example's `escape`.
-   :label  {:text-prop :label
-            :ctor  (fn [p]
-                     (let [w (g/label-new nil)]
-                       (if (:markup p)
-                         (g/label-set-markup w (:markup p))
-                         (g/label-set-text w (str (:label p ""))))
-                       (g/label-set-wrap w (g/->gbool (:wrap p)))
-                       (when-let [x (:xalign p)] (g/label-set-xalign w (float x)))
-                       w))
-            :apply (fn [w p changed]
-                     (when (or (contains? changed :markup) (contains? changed :label))
-                       (if (:markup p)
-                         (g/label-set-markup w (:markup p))
-                         (g/label-set-text w (str (:label p "")))))
-                     (when (contains? changed :wrap)
-                       (g/label-set-wrap w (g/->gbool (:wrap p))))
-                     (when (contains? changed :xalign)
-                       (g/label-set-xalign w (float (:xalign p 0.5)))))}
+   :label  (assoc (widget-spec #(g/label-new nil) apply-label!)
+                  :text-prop :label)
 
-   :button {:text-prop :label
-            :ctor  (fn [p] (g/button-new-with-label (str (:label p ""))))
-            :apply (fn [w p changed]
-                     (when (contains? changed :label)
-                       (g/button-set-label w (str (:label p "")))))}
+   :button (assoc (widget-spec #(g/button-new-with-label "") apply-button!)
+                  :text-prop :label)
 
-   :entry  {:text-prop :value
-            :ctor  (fn [p]
-                     (doto (g/entry-new)
-                       (g/entry-set-placeholder (:placeholder p))
-                       (g/editable-set-text (str (:value p "")))))
-            :apply (fn [w p changed]
-                     (when (contains? changed :placeholder)
-                       (g/entry-set-placeholder w (:placeholder p)))
-                     ;; only write back when it really differs, so we do not
-                     ;; fight the caret while the user types
-                     (when (contains? changed :value)
-                       (let [v (str (:value p ""))]
-                         (when (not= v (g/editable-get-text w))
-                           (g/editable-set-text w v)))))}
+   :level
+   (widget-spec g/level-bar-new
+     (fn [w p changed]
+       (when (contains? changed :min-value)
+         (g/level-bar-set-min-value w (double (:min-value p 0.0))))
+       (when (contains? changed :max-value)
+         (g/level-bar-set-max-value w (double (:max-value p 1.0))))
+       (when (contains? changed :value)
+         (g/level-bar-set-value w (double (:value p 0.0))))))
+
+   :entry (assoc (widget-spec g/entry-new apply-text-entry!)
+                 :text-prop :value)
 
    :check  {:text-prop :label
             :ctor  (fn [p]
                      (doto (g/check-button-new-with-label (str (:label p "")))
-                       (g/check-button-set-active (g/->gbool (:active p)))))
+                       (g/check-button-set-active (g/->gbool (:active p)))
+                       (g/check-button-set-inconsistent (g/->gbool (:inconsistent p)))))
             :apply (fn [w p changed]
                      (when (contains? changed :label)
                        (g/check-button-set-label w (str (:label p ""))))
+                     (when (contains? changed :inconsistent)
+                       (g/check-button-set-inconsistent w (g/->gbool (:inconsistent p))))
                      (when (contains? changed :active)
-                       (let [v (g/->gbool (:active p))]
-                         (when (not= v (g/check-button-get-active w))
-                           (g/check-button-set-active w v)))))}}))
+                       (g/check-button-set-active w (g/->gbool (:active p)))))}}))
 
 (defn register-widget!
   "Adds or replaces a widget spec. This is how an optional namespace extends the

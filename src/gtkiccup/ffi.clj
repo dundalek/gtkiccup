@@ -94,6 +94,8 @@
 ;; -- signals ----------------------------------------------------------------
 (defcfn signal-connect-data "g_signal_connect_data"
   [:pointer :string :pointer :pointer :pointer :int] :long)
+(defcfn signal-handler-block "g_signal_handler_block" [:pointer :long] :void)
+(defcfn signal-handler-unblock "g_signal_handler_unblock" [:pointer :long] :void)
 
 ;; -- window -----------------------------------------------------------------
 (defcfn window-new "gtk_window_new" [] :pointer)
@@ -103,6 +105,15 @@
 (defcfn window-present "gtk_window_present" [:pointer] :void)
 (defcfn window-destroy "gtk_window_destroy" [:pointer] :void)
 (defcfn window-set-decorated "gtk_window_set_decorated" [:pointer :int] :void)
+
+;; -- window bars and controls -----------------------------------------------
+(defcfn header-bar-new "gtk_header_bar_new" [] :pointer)
+(defcfn header-bar-pack-start "gtk_header_bar_pack_start" [:pointer :pointer] :void)
+(defcfn header-bar-pack-end "gtk_header_bar_pack_end" [:pointer :pointer] :void)
+(defcfn header-bar-set-title-widget "gtk_header_bar_set_title_widget" [:pointer :pointer] :void)
+(defcfn header-bar-remove "gtk_header_bar_remove" [:pointer :pointer] :void)
+(defcfn header-bar-set-show-title-buttons "gtk_header_bar_set_show_title_buttons" [:pointer :int] :void)
+(defcfn header-bar-set-decoration-layout "gtk_header_bar_set_decoration_layout" [:pointer :string] :void)
 
 ;; -- overlay ----------------------------------------------------------------
 (defcfn overlay-new "gtk_overlay_new" [] :pointer)
@@ -123,6 +134,12 @@
 (defcfn image-set-from-icon "gtk_image_set_from_icon_name" [:pointer :string] :void)
 (defcfn image-set-pixel-size "gtk_image_set_pixel_size" [:pointer :int] :void)
 
+(defcfn picture-new "gtk_picture_new" [] :pointer)
+(defcfn picture-set-filename "gtk_picture_set_filename" [:pointer :string] :void)
+(defcfn picture-set-content-fit "gtk_picture_set_content_fit" [:pointer :int] :void)
+(defcfn picture-set-can-shrink "gtk_picture_set_can_shrink" [:pointer :int] :void)
+(defcfn picture-set-alternative-text "gtk_picture_set_alternative_text" [:pointer :string] :void)
+
 ;; -- widget (common) --------------------------------------------------------
 (defcfn widget-set-sensitive "gtk_widget_set_sensitive" [:pointer :int] :void)
 (defcfn widget-set-tooltip-text "gtk_widget_set_tooltip_text" [:pointer :string] :void)
@@ -136,6 +153,7 @@
 (defcfn widget-set-focusable "gtk_widget_set_focusable" [:pointer :int] :void)
 (defcfn widget-set-halign "gtk_widget_set_halign" [:pointer :int] :void)
 (defcfn widget-set-valign "gtk_widget_set_valign" [:pointer :int] :void)
+(defcfn widget-queue-resize "gtk_widget_queue_resize" [:pointer] :void)
 (defcfn widget-add-css-class "gtk_widget_add_css_class" [:pointer :string] :void)
 (defcfn widget-remove-css-class "gtk_widget_remove_css_class" [:pointer :string] :void)
 
@@ -146,6 +164,7 @@
 ;; NULL sibling = first position. How a keyed move lands a child in place.
 (defcfn box-insert-child-after "gtk_box_insert_child_after" [:pointer :pointer :pointer] :void)
 (defcfn box-set-spacing "gtk_box_set_spacing" [:pointer :int] :void)
+(defcfn box-set-homogeneous "gtk_box_set_homogeneous" [:pointer :int] :void)
 
 ;; -- label ------------------------------------------------------------------
 (defcfn label-new "gtk_label_new" [:string] :pointer)
@@ -154,6 +173,9 @@
 (defcfn label-set-markup "gtk_label_set_markup" [:pointer :string] :void)
 (defcfn label-set-wrap "gtk_label_set_wrap" [:pointer :int] :void)
 (defcfn label-set-xalign "gtk_label_set_xalign" [:pointer :float] :void)
+(defcfn label-set-selectable "gtk_label_set_selectable" [:pointer :int] :void)
+(defcfn label-set-ellipsize "gtk_label_set_ellipsize" [:pointer :int] :void)
+
 (defcfn label-get-layout "gtk_label_get_layout" [:pointer] :pointer)
 (defcfn label-get-layout-offsets "gtk_label_get_layout_offsets" [:pointer :pointer :pointer] :void)
 (defcfn pango-index-to-pos "pango_layout_index_to_pos" [:pointer :int :pointer] :void)
@@ -166,11 +188,27 @@
 (defcfn button-new-with-label "gtk_button_new_with_label" [:string] :pointer)
 (defcfn button-set-label "gtk_button_set_label" [:pointer :string] :void)
 
+(defcfn button-set-has-frame "gtk_button_set_has_frame" [:pointer :int] :void)
+
+(defcfn button-set-icon-name "gtk_button_set_icon_name" [:pointer :string] :void)
+
+(defcfn check-button-set-inconsistent "gtk_check_button_set_inconsistent" [:pointer :int] :void)
+
+;; -- progress / status ------------------------------------------------------
+
+(defcfn level-bar-new "gtk_level_bar_new" [] :pointer)
+(defcfn level-bar-set-value "gtk_level_bar_set_value" [:pointer :double] :void)
+(defcfn level-bar-set-min-value "gtk_level_bar_set_min_value" [:pointer :double] :void)
+(defcfn level-bar-set-max-value "gtk_level_bar_set_max_value" [:pointer :double] :void)
+
 ;; -- entry / editable -------------------------------------------------------
 (defcfn entry-new "gtk_entry_new" [] :pointer)
-(defcfn entry-set-placeholder "gtk_entry_set_placeholder_text" [:pointer :string] :void)
 (defcfn editable-get-text "gtk_editable_get_text" [:pointer] :string)
 (defcfn editable-set-text "gtk_editable_set_text" [:pointer :string] :void)
+(defcfn editable-set-editable "gtk_editable_set_editable" [:pointer :int] :void)
+(defcfn object-set-string "g_object_set" [:pointer :string :& :string :pointer] :void)
+
+(defcfn label-set-max-width-chars "gtk_label_set_max_width_chars" [:pointer :int] :void)
 
 ;; -- check button -----------------------------------------------------------
 (defcfn check-button-new-with-label "gtk_check_button_new_with_label" [:string] :pointer)
@@ -234,6 +272,14 @@
 (def policy
   "GtkPolicyType, for a scrolled window's scrollbars."
   {:always 0 :automatic 1 :never 2 :external 3})
+
+(def ellipsize-mode
+  "PangoEllipsizeMode, for a label. :none is the GTK default."
+  {:none 0 :start 1 :middle 2 :end 3})
+
+(def content-fit
+  "GtkContentFit, for a picture. :contain is the GTK default."
+  {:fill 0 :contain 1 :cover 2 :scale-down 3})
 
 (defn ->gbool [x] (if x 1 0))
 (defn <-gbool [x] (not (zero? x)))
